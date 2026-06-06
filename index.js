@@ -111,6 +111,9 @@ async function run() {
     console.log(`Current Date (IST): ${formattedDate}`);
     console.log(`Yesterday's Date (IST): ${yesterdayFormattedDate}`);
     console.log(`Notion Page Title Date: ${pageTitleDate}`);
+    console.log(`Debug - Parent Page ID: "${PARENT_PAGE_ID}"`);
+    console.log(`Debug - Notion Token length: ${process.env.NOTION_TOKEN ? process.env.NOTION_TOKEN.length : 0}`);
+    console.log(`Debug - Notion Token prefix: "${process.env.NOTION_TOKEN ? process.env.NOTION_TOKEN.substring(0, 10) : 'none'}"`);
 
     if (!GEMINI_API_KEY) {
       throw new Error('GEMINI_API_KEY environment variable is not defined.');
