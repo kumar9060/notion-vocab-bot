@@ -8,7 +8,7 @@ const notion = new Client({
 
 // Parent page ID
 const PARENT_PAGE_ID = process.env.NOTION_PARENT_PAGE_ID || '36801e3e-1cfa-8019-a9e0-fccb947f45f8';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AQ.Ab8RN6JtWHPL5Fcr9UeR-KXy5wvbp4pDozsjzJUp8YCqyVfiSA';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AQ.Ab8RN6IeEnBf55TR6fmLDcVfUPdDikahSJi50DTLWWAOzTdjdw';
 
 // Helper to sleep for ms
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
