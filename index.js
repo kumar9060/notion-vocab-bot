@@ -10,6 +10,8 @@ const notion = new Client({
 const PARENT_PAGE_ID = process.env.NOTION_PARENT_PAGE_ID || '36801e3e-1cfa-8019-a9e0-fccb947f45f8';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AQ.Ab8RN6LlKx7lBcOIXoZp9EioI4ZIUIZ2_8yu04WGEXnu7gm3Og';
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+
 // Helper to sleep for ms
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -22,7 +24,7 @@ async function callGemini(payload, retries = 5, delay = 3000) {
         const postData = JSON.stringify(payload);
         const options = {
           hostname: 'generativelanguage.googleapis.com',
-          path: `/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+          path: `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -53,9 +55,25 @@ async function callGemini(payload, retries = 5, delay = 3000) {
     } catch (error) {
       const isTemporary = error.statusCode === 503 || error.statusCode === 429 || !error.statusCode;
       if (isTemporary && attempt < retries) {
-        console.warn(`Gemini API error (Status: ${error.statusCode || 'Network'}). Retrying in ${currentDelay}ms... (Attempt ${attempt}/${retries})`);
-        await sleep(currentDelay);
-        currentDelay *= 2; // Exponential backoff
+        let sleepDelay = currentDelay;
+        if (error.statusCode === 429 && error.body) {
+          try {
+            const errObj = JSON.parse(error.body);
+            const retryInfo = errObj.error?.details?.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
+            if (retryInfo && retryInfo.retryDelay) {
+              const delaySec = parseFloat(retryInfo.retryDelay);
+              if (!isNaN(delaySec)) {
+                sleepDelay = Math.ceil(delaySec + 2) * 1000; // Add 2 seconds safety buffer
+                console.warn(`Gemini API 429 Rate Limit: Dynamic backoff requested for ${delaySec}s. Safety sleeping for ${sleepDelay}ms...`);
+              }
+            }
+          } catch (e) {
+            // Ignore parsing error, fallback to currentDelay
+          }
+        }
+        console.warn(`Gemini API error (Status: ${error.statusCode || 'Network'}). Retrying in ${sleepDelay}ms... (Attempt ${attempt}/${retries})`);
+        await sleep(sleepDelay);
+        currentDelay *= 2; // Exponential backoff for next time
         continue;
       }
       throw new Error(error.body ? `API Error status ${error.statusCode}: ${error.body}` : error.message || error);
@@ -366,13 +384,30 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
       });
     });
 
-    // Create a new sub-page under the Editorial parent page (empty initially)
-    console.log('Sending request to Notion to create child page...');
-    const newPage = await notion.pages.create({
-      parent: {
-        page_id: PARENT_PAGE_ID
-      },
-      properties: {
+    // Create a new sub-page under the parent page/database (empty initially)
+    console.log('Detecting parent type and title column name...');
+    let parentParam = {};
+    let propertiesParam = {};
+    try {
+      console.log(`Checking if parent ID ${PARENT_PAGE_ID} is a database...`);
+      const dbInfo = await notion.databases.retrieve({ database_id: PARENT_PAGE_ID });
+      const titleColName = (dbInfo.properties && Object.keys(dbInfo.properties).find(k => dbInfo.properties[k].type === 'title')) || 'Page';
+      console.log(`Parent is a Database. Title column name: "${titleColName}"`);
+      
+      parentParam = { database_id: PARENT_PAGE_ID };
+      propertiesParam[titleColName] = {
+        title: [
+          {
+            text: {
+              content: pageTitleDate
+            }
+          }
+        ]
+      };
+    } catch (dbError) {
+      console.log(`Not a database or error retrieving: ${dbError.message}. Assuming page parent.`);
+      parentParam = { page_id: PARENT_PAGE_ID };
+      propertiesParam = {
         title: {
           title: [
             {
@@ -382,7 +417,13 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
             }
           ]
         }
-      }
+      };
+    }
+
+    console.log('Sending request to Notion to create child page...');
+    const newPage = await notion.pages.create({
+      parent: parentParam,
+      properties: propertiesParam
     });
 
     console.log(`Page created. ID: ${newPage.id}`);
