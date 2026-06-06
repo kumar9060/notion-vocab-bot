@@ -65,21 +65,26 @@ async function callGemini(payload, retries = 5, delay = 3000) {
 
 // Helper to format date in IST
 function getISTDateInfo() {
-  const options = { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'long', day: 'numeric' };
-  const formatter = new Intl.DateTimeFormat('en-IN', options);
-  const formattedDate = formatter.format(new Date()); // e.g. "7 June 2026"
+  const fullOptions = { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'long', day: 'numeric' };
+  const shortOptions = { timeZone: 'Asia/Kolkata', month: 'long', day: 'numeric' };
+  
+  const fullFormatter = new Intl.DateTimeFormat('en-IN', fullOptions);
+  const shortFormatter = new Intl.DateTimeFormat('en-IN', shortOptions);
+  
+  const formattedDate = fullFormatter.format(new Date()); // e.g. "7 June 2026"
+  const pageTitleDate = shortFormatter.format(new Date()); // e.g. "7 June"
   
   const todayISTStr = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
   const today = new Date(todayISTStr);
   
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  const yesterdayFormattedDate = formatter.format(yesterday);
+  const yesterdayFormattedDate = fullFormatter.format(yesterday);
   
-  return { formattedDate, yesterdayFormattedDate };
+  return { formattedDate, yesterdayFormattedDate, pageTitleDate };
 }
 
-// Generate rich text structure for a paragraph with bold and underlined label
+// Generate rich text structure for a paragraph with bold, italic, and underlined label
 function createLabeledParagraph(label, content) {
   return {
     object: 'block',
@@ -89,7 +94,7 @@ function createLabeledParagraph(label, content) {
         {
           type: 'text',
           text: { content: label + '\n' },
-          annotations: { bold: true, underline: true }
+          annotations: { bold: true, italic: true, underline: true }
         },
         {
           type: 'text',
@@ -102,9 +107,10 @@ function createLabeledParagraph(label, content) {
 
 async function run() {
   try {
-    const { formattedDate, yesterdayFormattedDate } = getISTDateInfo();
+    const { formattedDate, yesterdayFormattedDate, pageTitleDate } = getISTDateInfo();
     console.log(`Current Date (IST): ${formattedDate}`);
     console.log(`Yesterday's Date (IST): ${yesterdayFormattedDate}`);
+    console.log(`Notion Page Title Date: ${pageTitleDate}`);
 
     if (!GEMINI_API_KEY) {
       throw new Error('GEMINI_API_KEY environment variable is not defined.');
@@ -113,11 +119,11 @@ async function run() {
     // ==========================================
     // STEP 1: Fetch 10 words from The Hindu editorials
     // ==========================================
-    console.log('Step 1: Searching for The Hindu editorial words in the last 24 hours...');
+    console.log('Step 1: Searching for The Hindu editorial words in the last 24 hours (UPSC focus)...');
     
     const searchPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences, introductions, explanations, apologies, or warnings about web access limitations. You must output exactly 10 words separated by commas and nothing else. If search results for the specific day are paywalled or thin, use your knowledge of current news topics to select 10 high-frequency, challenging UPSC vocabulary words relevant to today.
 
-Identify 10 important or challenging vocabulary words from The Hindu articles or editorials on ${formattedDate} or ${yesterdayFormattedDate}.
+Identify 10 important, challenging, and UPSC-oriented vocabulary words (words relevant to administrative, governance, socio-economic, policy, international relations, or ethical discussions in civil services prep) from The Hindu articles or editorials on ${formattedDate} or ${yesterdayFormattedDate}.
 Output format: word1, word2, word3, word4, word5, word6, word7, word8, word9, word10`;
 
     const step1Payload = {
@@ -368,7 +374,7 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
           title: [
             {
               text: {
-                content: `Vocabulary - ${formattedDate}`
+                content: pageTitleDate
               }
             }
           ]
