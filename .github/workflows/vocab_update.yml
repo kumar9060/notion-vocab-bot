@@ -27,5 +27,6 @@ jobs:
       env:
         NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         NOTION_PARENT_PAGE_ID: ${{ secrets.NOTION_PARENT_PAGE_ID }}
+        NOTION_WEEKLY_PARENT_PAGE_ID: ${{ secrets.NOTION_WEEKLY_PARENT_PAGE_ID }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       run: node index.js

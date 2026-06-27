@@ -8,6 +8,7 @@ const notion = new Client({
 
 // Parent page ID
 const PARENT_PAGE_ID = process.env.NOTION_PARENT_PAGE_ID || '36801e3e-1cfa-8019-a9e0-fccb947f45f8';
+const WEEKLY_PARENT_PAGE_ID = process.env.NOTION_WEEKLY_PARENT_PAGE_ID || '36801e3e-1cfa-8072-9f1b-c74fd7a4e2c9';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AQ.Ab8RN6LlKx7lBcOIXoZp9EioI4ZIUIZ2_8yu04WGEXnu7gm3Og';
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
@@ -15,8 +16,11 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 // Helper to sleep for ms
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Helper to make POST request to Gemini API with exponential backoff retry logic
-async function callGemini(payload, retries = 5, delay = 3000) {
+// Helper to make POST request to Gemini API with exponential backoff retry logic and dynamic model fallback
+let activeModel = GEMINI_MODEL;
+const MODEL_FALLBACKS = ['gemini-2.5-flash-lite', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash'];
+
+async function callGemini(payload, retries = 7, delay = 4000) {
   let currentDelay = delay;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -24,7 +28,7 @@ async function callGemini(payload, retries = 5, delay = 3000) {
         const postData = JSON.stringify(payload);
         const options = {
           hostname: 'generativelanguage.googleapis.com',
-          path: `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+          path: `/v1beta/models/${activeModel}:generateContent?key=${GEMINI_API_KEY}`,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -53,6 +57,28 @@ async function callGemini(payload, retries = 5, delay = 3000) {
         req.end();
       });
     } catch (error) {
+      if (error.statusCode === 429 && error.body) {
+        try {
+          const errObj = JSON.parse(error.body);
+          const quotaFailure = errObj.error?.details?.find(d => d['@type'] === 'type.googleapis.com/google.rpc.QuotaFailure');
+          const isDailyLimit = quotaFailure?.violations?.some(v => v.quotaId?.includes('PerDay')) || 
+                               errObj.error?.message?.includes('quota');
+          if (isDailyLimit) {
+            const currentIdx = MODEL_FALLBACKS.indexOf(activeModel);
+            const nextModel = MODEL_FALLBACKS[currentIdx + 1];
+            if (nextModel) {
+              console.warn(`⚠️ Daily quota exceeded for model "${activeModel}". Switching to fallback model "${nextModel}"...`);
+              activeModel = nextModel;
+              attempt = 0; // Reset attempts to start fresh with new model
+              currentDelay = delay;
+              continue;
+            }
+          }
+        } catch (e) {
+          // Ignore parsing error
+        }
+      }
+
       const isTemporary = error.statusCode === 503 || error.statusCode === 429 || !error.statusCode;
       if (isTemporary && attempt < retries) {
         let sleepDelay = currentDelay;
@@ -68,7 +94,7 @@ async function callGemini(payload, retries = 5, delay = 3000) {
               }
             }
           } catch (e) {
-            // Ignore parsing error, fallback to currentDelay
+            // Ignore parsing error
           }
         }
         console.warn(`Gemini API error (Status: ${error.statusCode || 'Network'}). Retrying in ${sleepDelay}ms... (Attempt ${attempt}/${retries})`);
@@ -102,7 +128,101 @@ function getISTDateInfo() {
   return { formattedDate, yesterdayFormattedDate, pageTitleDate };
 }
 
-// Generate rich text structure for a paragraph with bold, italic, and underlined label
+// Generate rich text structure for a paragraph with bold and italic label (no underline) on the same line
+function createBoldItalicParagraph(label, content) {
+  return {
+    object: 'block',
+    type: 'paragraph',
+    paragraph: {
+      rich_text: [
+        {
+          type: 'text',
+          text: { content: label + ' ' },
+          annotations: { bold: true, italic: true }
+        },
+        {
+          type: 'text',
+          text: { content: content || 'N/A' }
+        }
+      ]
+    }
+  };
+}
+
+// Helper to format weekly date range in IST (e.g. "22 - 27 Jun" or "29 Jun - 04 Jul")
+function getWeeklyDateRange() {
+  const todayISTStr = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+  const today = new Date(todayISTStr);
+  
+  // Monday is 6 days ago
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - 6);
+  
+  // Saturday is 1 day ago
+  const saturday = new Date(today);
+  saturday.setDate(today.getDate() - 1);
+  
+  const shortMonth = (date) => date.toLocaleString('en-US', { month: 'short', timeZone: 'Asia/Kolkata' });
+  const padZero = (num) => num.toString().padStart(2, '0');
+  
+  const monDay = padZero(monday.getDate());
+  const satDay = padZero(saturday.getDate());
+  const monMonth = shortMonth(monday);
+  const satMonth = shortMonth(saturday);
+  
+  if (monMonth === satMonth) {
+    return `${monDay} - ${satDay} ${monMonth}`;
+  } else {
+    return `${monDay} ${monMonth} - ${satDay} ${satMonth}`;
+  }
+}
+
+// Generic page creator to dynamically handle database vs page parent types
+async function createNotionPage(parentId, titleText) {
+  console.log(`Detecting parent type and title column name for parent ID: ${parentId}...`);
+  let parentParam = {};
+  let propertiesParam = {};
+  try {
+    console.log(`Checking if parent ID ${parentId} is a database...`);
+    const dbInfo = await notion.databases.retrieve({ database_id: parentId });
+    const titleColName = (dbInfo.properties && Object.keys(dbInfo.properties).find(k => dbInfo.properties[k].type === 'title')) || 'Page';
+    console.log(`Parent is a Database. Title column name: "${titleColName}"`);
+    
+    parentParam = { database_id: parentId };
+    propertiesParam[titleColName] = {
+      title: [
+        {
+          text: {
+            content: titleText
+          }
+        }
+      ]
+    };
+  } catch (dbError) {
+    console.log(`Not a database or error retrieving: ${dbError.message}. Assuming page parent.`);
+    parentParam = { page_id: parentId };
+    propertiesParam = {
+      title: {
+        title: [
+          {
+            text: {
+              content: titleText
+            }
+          }
+        ]
+      }
+    };
+  }
+
+  console.log('Sending request to Notion to create child page...');
+  const newPage = await notion.pages.create({
+    parent: parentParam,
+    properties: propertiesParam
+  });
+  return newPage;
+}
+
+// Generate rich text structure for a daily paragraph with bold, italic, and underlined label
 function createLabeledParagraph(label, content) {
   return {
     object: 'block',
@@ -154,22 +274,42 @@ Output format: word1, word2, word3, word4, word5, word6, word7, word8, word9, wo
       tools: [{ google_search: {} }]
     };
 
-    const step1Result = await callGemini(step1Payload);
-    const rawWordsText = step1Result?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawWordsText) {
-      throw new Error('Failed to retrieve vocabulary list from Gemini Search.');
+    let rawWordsText;
+    let wordsList = [];
+    try {
+      const step1Result = await callGemini(step1Payload);
+      rawWordsText = step1Result?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (rawWordsText) {
+        wordsList = rawWordsText
+          .replace(/[*\n#]/g, '')
+          .split(',')
+          .map(w => w.trim())
+          .filter(w => w.length > 0 && !w.includes(' '));
+      }
+    } catch (e) {
+      console.warn(`Search-based word retrieval failed: ${e.message}. Using fallback model call...`);
     }
 
-    console.log(`Raw search response: ${rawWordsText.trim()}`);
-    // Clean and split the words
-    const wordsList = rawWordsText
-      .replace(/[*\n#]/g, '') // remove any stray formatting
-      .split(',')
-      .map(w => w.trim())
-      .filter(w => w.length > 0);
-
     if (wordsList.length < 5) {
-      throw new Error(`Retrieved too few words: ${JSON.stringify(wordsList)}`);
+      console.log('Falling back to direct UPSC word generation (no search tool)...');
+      const fallbackPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences, introductions, explanations, apologies, or warnings. You must output exactly 10 words separated by commas and nothing else.
+Identify 10 important, challenging, and UPSC-oriented vocabulary words (words relevant to administrative, governance, socio-economic, policy, international relations, or ethical discussions in civil services prep) typical of The Hindu editorial articles.
+Output format: word1, word2, word3, word4, word5, word6, word7, word8, word9, word10`;
+      const fallbackPayload = {
+        contents: [{
+          parts: [{ text: fallbackPrompt }]
+        }]
+      };
+      const fallbackResult = await callGemini(fallbackPayload);
+      const fallbackText = fallbackResult?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!fallbackText) {
+        throw new Error('Failed to retrieve vocabulary list from fallback Gemini generation.');
+      }
+      wordsList = fallbackText
+        .replace(/[*\n#]/g, '')
+        .split(',')
+        .map(w => w.trim())
+        .filter(w => w.length > 0 && !w.includes(' '));
     }
 
     console.log(`Successfully identified ${wordsList.length} words:`, wordsList.join(', '));
@@ -189,7 +329,7 @@ Output format: word1, word2, word3, word4, word5, word6, word7, word8, word9, wo
       const detailPrompt = `For the following vocabulary words: ${batch.join(', ')}. Generate a detailed educational vocabulary profile suitable for UPSC preparation. Each word must have complete details. 
 Return the output strictly as a JSON array matching the required schema. Ensure the fields exactly match:
 - word
-- pronunciation (English IPA, e.g. /ˌæk.rɪˈmoʊ.ni.əs/)
+- pronunciation (English phonetic respelling and Hindi Devanagari script, e.g., "im-pol-i-tik (इम्पॉलिटिक)" or "per-nish-uhs (पर्निशस)". Ensure the Devanagari transliteration is extremely accurate according to the correct English pronunciation.)
 - part_of_speech (e.g. Noun/Verb/Adjective)
 - hindi_meaning (precise translation, e.g. "उग्र, कटुतापूर्ण")
 - english_definition (clear and simple definition)
@@ -385,47 +525,7 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
     });
 
     // Create a new sub-page under the parent page/database (empty initially)
-    console.log('Detecting parent type and title column name...');
-    let parentParam = {};
-    let propertiesParam = {};
-    try {
-      console.log(`Checking if parent ID ${PARENT_PAGE_ID} is a database...`);
-      const dbInfo = await notion.databases.retrieve({ database_id: PARENT_PAGE_ID });
-      const titleColName = (dbInfo.properties && Object.keys(dbInfo.properties).find(k => dbInfo.properties[k].type === 'title')) || 'Page';
-      console.log(`Parent is a Database. Title column name: "${titleColName}"`);
-      
-      parentParam = { database_id: PARENT_PAGE_ID };
-      propertiesParam[titleColName] = {
-        title: [
-          {
-            text: {
-              content: pageTitleDate
-            }
-          }
-        ]
-      };
-    } catch (dbError) {
-      console.log(`Not a database or error retrieving: ${dbError.message}. Assuming page parent.`);
-      parentParam = { page_id: PARENT_PAGE_ID };
-      propertiesParam = {
-        title: {
-          title: [
-            {
-              text: {
-                content: pageTitleDate
-              }
-            }
-          ]
-        }
-      };
-    }
-
-    console.log('Sending request to Notion to create child page...');
-    const newPage = await notion.pages.create({
-      parent: parentParam,
-      properties: propertiesParam
-    });
-
+    const newPage = await createNotionPage(PARENT_PAGE_ID, pageTitleDate);
     console.log(`Page created. ID: ${newPage.id}`);
     console.log(`Appending ${childrenBlocks.length} blocks in chunks...`);
 
@@ -441,10 +541,199 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
       console.log(`Appended blocks ${i} to ${Math.min(i + chunkSize, childrenBlocks.length)}`);
     }
 
-    console.log(`✅ Success! Created new page: ${newPage.url}`);
+    console.log(`✅ Success! Created new daily page: ${newPage.url}`);
+
+    // Check if today is Sunday (IST) to run weekly compilation
+    const todayISTStr = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+    const todayIST = new Date(todayISTStr);
+    if (todayIST.getDay() === 0) { // 0 = Sunday
+      console.log('Today is Sunday! Starting Weekly Revision generation...');
+      await runWeeklyRevision();
+    }
   } catch (error) {
     console.error('❌ Error executing automation:', error);
     process.exit(1);
+  }
+}
+
+async function runWeeklyRevision() {
+  try {
+    const weeklyTitle = getWeeklyDateRange();
+    console.log(`Starting weekly compilation. Page Title: "${weeklyTitle}"`);
+
+    // ==========================================
+    // STEP 1: Fetch 20 weekly words
+    // ==========================================
+    console.log('Fetching 20 weekly vocabulary words (UPSC focus)...');
+    const weeklySearchPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences, introductions, explanations, apologies, or warnings. You must output exactly 20 words separated by commas and nothing else.
+Identify the 20 most important, challenging, and UPSC-oriented vocabulary words (words relevant to administrative, governance, socio-economic, policy, international relations, or ethical discussions in civil services prep) that appeared in The Hindu editorials or articles in the last 7 days.
+Output format: word1, word2, word3, ..., word20`;
+
+    const weeklyPayload = {
+      contents: [{
+        parts: [{ text: weeklySearchPrompt }]
+      }],
+      tools: [{ google_search: {} }]
+    };
+
+    let weeklyWordsList = [];
+    try {
+      const result = await callGemini(weeklyPayload);
+      const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        weeklyWordsList = text
+          .replace(/[*\n#]/g, '')
+          .split(',')
+          .map(w => w.trim())
+          .filter(w => w.length > 0 && !w.includes(' '));
+      }
+    } catch (e) {
+      console.warn(`Weekly search failed: ${e.message}. Using fallback...`);
+    }
+
+    if (weeklyWordsList.length < 10) {
+      console.log('Falling back to direct weekly word generation (no search)...');
+      const fallbackWeeklyPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences. You must output exactly 20 words separated by commas and nothing else.
+Generate 20 challenging, UPSC-oriented vocabulary words typical of The Hindu editorials relevant to governance, economics, polity, ethics, and social issues.
+Output format: word1, word2, ..., word20`;
+      const fallbackResult = await callGemini({
+        contents: [{ parts: [{ text: fallbackWeeklyPrompt }] }]
+      });
+      const text = fallbackResult?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) {
+        throw new Error('Failed to generate weekly words fallback.');
+      }
+      weeklyWordsList = text
+        .replace(/[*\n#]/g, '')
+        .split(',')
+        .map(w => w.trim())
+        .filter(w => w.length > 0 && !w.includes(' '));
+    }
+
+    console.log(`Successfully identified ${weeklyWordsList.length} weekly words:`, weeklyWordsList.join(', '));
+
+    // ==========================================
+    // STEP 2: Generate detailed profiles in JSON (in batches of 5)
+    // ==========================================
+    console.log('Generating detailed profiles for weekly words in batches of 5...');
+    const processedWeekly = [];
+    const batchSize = 5;
+
+    for (let i = 0; i < weeklyWordsList.length; i += batchSize) {
+      const batch = weeklyWordsList.slice(i, i + batchSize);
+      console.log(`Generating details for weekly batch ${i / batchSize + 1}: ${batch.join(', ')}`);
+      
+      const detailPrompt = `For the following vocabulary words: ${batch.join(', ')}. Generate a detailed educational vocabulary profile suitable for UPSC preparation. Each word must have complete details. 
+Return the output strictly as a JSON array matching the required schema. Ensure the fields exactly match:
+- word
+- pronunciation (English phonetic respelling and Hindi Devanagari script, e.g., "im-pol-i-tik (इम्पॉलिटिक)" or "per-nish-uhs (पर्निशस)". Ensure the Devanagari transliteration is extremely accurate according to the correct English pronunciation.)
+- part_of_speech (e.g. Noun/Verb/Adjective)
+- hindi_meaning (precise translation, e.g. "अविवेकपूर्ण, अदूरदर्शी")
+- english_definition (clear and simple definition)
+- synonyms (comma-separated list of 3-4 words)
+- antonyms (comma-separated list of 3-4 words)
+- related_terms (comma-separated list of related forms)
+- example_sentence (contextual sentence)
+- upsc_usage (specific guidelines on how to use it in answers)
+- editorial_relevance (how it commonly appears in editorials)
+- mnemonic (easy memory trick)
+- etymology (origin of the word)
+- tone (Positive / Negative / Neutral etc.)`;
+
+      const payload = {
+        contents: [{ parts: [{ text: detailPrompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                word: { type: "STRING" },
+                pronunciation: { type: "STRING" },
+                part_of_speech: { type: "STRING" },
+                hindi_meaning: { type: "STRING" },
+                english_definition: { type: "STRING" },
+                synonyms: { type: "STRING" },
+                antonyms: { type: "STRING" }
+              },
+              required: ["word", "pronunciation", "part_of_speech", "hindi_meaning", "english_definition", "synonyms", "antonyms"]
+            }
+          }
+        }
+      };
+
+      const result = await callGemini(payload);
+      const jsonText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!jsonText) {
+        throw new Error(`Failed to retrieve weekly detailed profiles for batch ${batch.join(', ')}`);
+      }
+
+      try {
+        const batchResults = JSON.parse(jsonText);
+        processedWeekly.push(...batchResults);
+      } catch (err) {
+        throw new Error(`Failed to parse weekly batch JSON. Raw: ${jsonText}. Error: ${err.message}`);
+      }
+
+      if (i + batchSize < weeklyWordsList.length) {
+        console.log('Waiting 2 seconds before the next weekly batch...');
+        await sleep(2000);
+      }
+    }
+
+    console.log(`Total weekly words processed: ${processedWeekly.length}`);
+
+    // ==========================================
+    // STEP 3: Format and upload weekly to Notion
+    // ==========================================
+    const weeklyBlocks = [];
+    processedWeekly.forEach((w, index) => {
+      // 1. Heading 2 for Word
+      weeklyBlocks.push({
+        object: 'block',
+        type: 'heading_2',
+        heading_2: {
+          rich_text: [{ type: 'text', text: { content: `${index + 1}. ${w.word.charAt(0).toUpperCase() + w.word.slice(1)}` } }]
+        }
+      });
+
+      // 2. Bold + Italic Properties on next lines
+      const cleanPronunc = w.pronunciation ? (w.pronunciation.endsWith(',') ? w.pronunciation : w.pronunciation + ',') : 'N/A,';
+      const cleanPart = w.part_of_speech ? (w.part_of_speech.endsWith(',') ? w.part_of_speech : w.part_of_speech + ',') : 'N/A,';
+
+      weeklyBlocks.push(createBoldItalicParagraph('Pronunciation:', cleanPronunc));
+      weeklyBlocks.push(createBoldItalicParagraph('Part of speech:', cleanPart));
+      weeklyBlocks.push(createBoldItalicParagraph('Hindi meaning:', w.hindi_meaning));
+      weeklyBlocks.push(createBoldItalicParagraph('Simple English definition:', w.english_definition));
+      weeklyBlocks.push(createBoldItalicParagraph('Synonyms:', w.synonyms));
+      weeklyBlocks.push(createBoldItalicParagraph('Antonyms:', w.antonyms));
+
+      // Divider between weekly words
+      weeklyBlocks.push({
+        object: 'block',
+        type: 'divider',
+        divider: {}
+      });
+    });
+
+    const weeklyPage = await createNotionPage(WEEKLY_PARENT_PAGE_ID, weeklyTitle);
+    console.log(`Weekly Page created. ID: ${weeklyPage.id}`);
+
+    console.log(`Appending ${weeklyBlocks.length} weekly blocks in chunks...`);
+    const chunkSize = 24; // 3 words * 8 blocks/word = 24 blocks
+    for (let i = 0; i < weeklyBlocks.length; i += chunkSize) {
+      const chunk = weeklyBlocks.slice(i, i + chunkSize);
+      await notion.blocks.children.append({
+        block_id: weeklyPage.id,
+        children: chunk
+      });
+      console.log(`Appended weekly blocks ${i} to ${Math.min(i + chunkSize, weeklyBlocks.length)}`);
+    }
+
+    console.log(`✅ Success! Created new Weekly Revision page: ${weeklyPage.url}`);
+  } catch (weeklyError) {
+    console.error('❌ Error executing weekly compilation:', weeklyError);
   }
 }
 
