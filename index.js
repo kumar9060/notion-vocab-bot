@@ -9,7 +9,7 @@ const notion = new Client({
 // Parent page ID
 const PARENT_PAGE_ID = process.env.NOTION_PARENT_PAGE_ID || '36801e3e-1cfa-8019-a9e0-fccb947f45f8';
 const WEEKLY_PARENT_PAGE_ID = process.env.NOTION_WEEKLY_PARENT_PAGE_ID || '36801e3e-1cfa-8072-9f1b-c74fd7a4e2c9';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AQ.Ab8RN6LlKx7lBcOIXoZp9EioI4ZIUIZ2_8yu04WGEXnu7gm3Og';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
