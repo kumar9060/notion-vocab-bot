@@ -811,7 +811,45 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
       });
     });
 
-    const weeklyPage = await createNotionPage(WEEKLY_PARENT_PAGE_ID, weeklyTitle);
+    // Automatically find or create the Month page under WEEKLY_PARENT_PAGE_ID
+    const satDateISTStr = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+    const satDateIST = new Date(satDateISTStr);
+    const currentDay = satDateIST.getDay();
+    const daysToSubtract = currentDay === 0 ? 1 : (currentDay === 6 ? 0 : currentDay + 1);
+    satDateIST.setDate(satDateIST.getDate() - daysToSubtract);
+    const currentMonthName = satDateIST.toLocaleString("en-US", { month: "long", timeZone: "Asia/Kolkata" });
+
+    console.log(`Locating weekly month page "${currentMonthName}" under parent ID: ${WEEKLY_PARENT_PAGE_ID}...`);
+    
+    let weeklyMonthPageId = WEEKLY_PARENT_PAGE_ID;
+    try {
+      const searchResponse = await notion.search({
+        query: currentMonthName,
+        page_size: 20,
+        filter: { value: 'page', property: 'object' }
+      });
+      
+      const foundMonthPage = searchResponse.results.find(page => {
+        const title = page.properties?.Page?.title?.[0]?.plain_text || page.properties?.title?.title?.[0]?.plain_text || '';
+        const isTitleMatch = title.trim().toLowerCase() === currentMonthName.toLowerCase();
+        const isParentMatch = page.parent?.database_id === WEEKLY_PARENT_PAGE_ID || page.parent?.page_id === WEEKLY_PARENT_PAGE_ID;
+        return isTitleMatch && isParentMatch;
+      });
+
+      if (foundMonthPage) {
+        weeklyMonthPageId = foundMonthPage.id;
+        console.log(`Found weekly month page "${currentMonthName}" (ID: ${weeklyMonthPageId})`);
+      } else {
+        console.log(`Weekly month page "${currentMonthName}" not found. Creating a new one under parent...`);
+        const newMonthPage = await createNotionPage(WEEKLY_PARENT_PAGE_ID, currentMonthName);
+        weeklyMonthPageId = newMonthPage.id;
+        console.log(`Created new weekly month page "${currentMonthName}" (ID: ${weeklyMonthPageId})`);
+      }
+    } catch (searchError) {
+      console.warn(`Warning searching/creating weekly month page: ${searchError.message}. Falling back directly to WEEKLY_PARENT_PAGE_ID.`);
+    }
+
+    const weeklyPage = await createNotionPage(weeklyMonthPageId, weeklyTitle);
     console.log(`Weekly Page created. ID: ${weeklyPage.id}`);
 
     console.log(`Appending ${weeklyBlocks.length} weekly blocks in chunks...`);
