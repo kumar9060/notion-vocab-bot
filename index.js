@@ -262,9 +262,8 @@ async function run() {
     // ==========================================
     console.log('Step 1: Searching for The Hindu editorial words in the last 24 hours (UPSC focus)...');
     
-    const searchPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences, introductions, explanations, apologies, or warnings about web access limitations. You must output exactly 10 words separated by commas and nothing else. If search results for the specific day are paywalled or thin, use your knowledge of current news topics to select 10 high-frequency, challenging UPSC vocabulary words relevant to today.
-
-Identify 10 important, challenging, and UPSC-oriented vocabulary words (words relevant to administrative, governance, socio-economic, policy, international relations, or ethical discussions in civil services prep) from The Hindu articles or editorials on ${formattedDate} or ${yesterdayFormattedDate}.
+    const searchPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences, introductions, explanations, apologies, or warnings. You must output exactly 10 words separated by commas and nothing else. Ensure correct English spelling for every word (do NOT output misspelled words). Avoid common or basic words (such as "auspicious", "preparedness", "loopholes"). Focus strictly on high-utility administrative, governance, socio-economic, policy, international relations, or ethical vocabulary (e.g., "hegemony", "ameliorate", "pernicious", "paradigm", "efficacy", "obfuscate", "draconian", "impunity", "defection").
+Identify 10 important, challenging, and UPSC-oriented vocabulary words from The Hindu articles or editorials on ${formattedDate} or ${yesterdayFormattedDate}.
 Output format: word1, word2, word3, word4, word5, word6, word7, word8, word9, word10`;
 
     const step1Payload = {
@@ -292,8 +291,8 @@ Output format: word1, word2, word3, word4, word5, word6, word7, word8, word9, wo
 
     if (wordsList.length < 5) {
       console.log('Falling back to direct UPSC word generation (no search tool)...');
-      const fallbackPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences, introductions, explanations, apologies, or warnings. You must output exactly 10 words separated by commas and nothing else.
-Identify 10 important, challenging, and UPSC-oriented vocabulary words (words relevant to administrative, governance, socio-economic, policy, international relations, or ethical discussions in civil services prep) typical of The Hindu editorial articles.
+      const fallbackPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences, introductions, explanations, apologies, or warnings. You must output exactly 10 words separated by commas and nothing else. Ensure correct English spelling for every word (do NOT output misspelled words). Avoid common or basic words (such as "auspicious", "preparedness", "loopholes"). Focus strictly on high-utility administrative, governance, socio-economic, policy, international relations, or ethical vocabulary (e.g., "hegemony", "ameliorate", "pernicious", "paradigm", "efficacy", "obfuscate", "draconian", "impunity", "defection").
+Identify 10 important, challenging, and UPSC-oriented vocabulary words typical of The Hindu editorial articles.
 Output format: word1, word2, word3, word4, word5, word6, word7, word8, word9, word10`;
       const fallbackPayload = {
         contents: [{
@@ -565,8 +564,8 @@ async function runWeeklyRevision() {
     // STEP 1: Fetch 20 weekly words
     // ==========================================
     console.log('Fetching 20 weekly vocabulary words (UPSC focus)...');
-    const weeklySearchPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences, introductions, explanations, apologies, or warnings. You must output exactly 20 words separated by commas and nothing else.
-Identify the 20 most important, challenging, and UPSC-oriented vocabulary words (words relevant to administrative, governance, socio-economic, policy, international relations, or ethical discussions in civil services prep) that appeared in The Hindu editorials or articles in the last 7 days.
+    const weeklySearchPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences, introductions, explanations, apologies, or warnings. You must output exactly 20 words separated by commas and nothing else. Ensure correct English spelling for every word (do NOT output misspelled words). Avoid common or basic words (such as "auspicious", "preparedness", "loopholes"). Focus strictly on high-utility administrative, governance, socio-economic, policy, international relations, or ethical vocabulary (e.g., "hegemony", "ameliorate", "pernicious", "paradigm", "efficacy", "obfuscate", "draconian", "impunity", "defection").
+Identify the 20 most important, challenging, and UPSC-oriented vocabulary words that appeared in The Hindu editorials or articles in the last 7 days.
 Output format: word1, word2, word3, ..., word20`;
 
     const weeklyPayload = {
@@ -593,7 +592,7 @@ Output format: word1, word2, word3, ..., word20`;
 
     if (weeklyWordsList.length < 10) {
       console.log('Falling back to direct weekly word generation (no search)...');
-      const fallbackWeeklyPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences. You must output exactly 20 words separated by commas and nothing else.
+      const fallbackWeeklyPrompt = `SYSTEM INSTRUCTION: You are a strict text parser. Do NOT write sentences. You must output exactly 20 words separated by commas and nothing else. Ensure correct English spelling for every word (do NOT output misspelled words). Avoid common or basic words (such as "auspicious", "preparedness", "loopholes"). Focus strictly on high-utility administrative, governance, socio-economic, policy, international relations, or ethical vocabulary (e.g., "hegemony", "ameliorate", "pernicious", "paradigm", "efficacy", "obfuscate", "draconian", "impunity", "defection").
 Generate 20 challenging, UPSC-oriented vocabulary words typical of The Hindu editorials relevant to governance, economics, polity, ethics, and social issues.
 Output format: word1, word2, ..., word20`;
       const fallbackResult = await callGemini({
