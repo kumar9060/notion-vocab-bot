@@ -523,8 +523,40 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
       });
     });
 
-    // Create a new sub-page under the parent page/database (empty initially)
-    const newPage = await createNotionPage(PARENT_PAGE_ID, pageTitleDate);
+    // Automatically find or create the Month page under PARENT_PAGE_ID
+    const currentMonthName = new Date().toLocaleString("en-US", { month: "long", timeZone: "Asia/Kolkata" });
+    console.log(`Locating month page "${currentMonthName}" under parent ID: ${PARENT_PAGE_ID}...`);
+    
+    let monthPageId = PARENT_PAGE_ID;
+    try {
+      const searchResponse = await notion.search({
+        query: currentMonthName,
+        page_size: 20,
+        filter: { value: 'page', property: 'object' }
+      });
+      
+      const foundMonthPage = searchResponse.results.find(page => {
+        const title = page.properties?.Page?.title?.[0]?.plain_text || page.properties?.title?.title?.[0]?.plain_text || '';
+        const isTitleMatch = title.trim().toLowerCase() === currentMonthName.toLowerCase();
+        const isParentMatch = page.parent?.database_id === PARENT_PAGE_ID || page.parent?.page_id === PARENT_PAGE_ID;
+        return isTitleMatch && isParentMatch;
+      });
+
+      if (foundMonthPage) {
+        monthPageId = foundMonthPage.id;
+        console.log(`Found month page "${currentMonthName}" (ID: ${monthPageId})`);
+      } else {
+        console.log(`Month page "${currentMonthName}" not found. Creating a new one under parent...`);
+        const newMonthPage = await createNotionPage(PARENT_PAGE_ID, currentMonthName);
+        monthPageId = newMonthPage.id;
+        console.log(`Created new month page "${currentMonthName}" (ID: ${monthPageId})`);
+      }
+    } catch (searchError) {
+      console.warn(`Warning searching/creating month page: ${searchError.message}. Falling back directly to PARENT_PAGE_ID.`);
+    }
+
+    // Create a new sub-page under the resolved month parent page/database (empty initially)
+    const newPage = await createNotionPage(monthPageId, pageTitleDate);
     console.log(`Page created. ID: ${newPage.id}`);
     console.log(`Appending ${childrenBlocks.length} blocks in chunks...`);
 
