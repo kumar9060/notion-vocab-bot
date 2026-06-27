@@ -18,7 +18,7 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Helper to make POST request to Gemini API with exponential backoff retry logic and dynamic model fallback
 let activeModel = GEMINI_MODEL;
-const MODEL_FALLBACKS = ['gemini-2.5-flash-lite', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash'];
+const MODEL_FALLBACKS = ['gemini-2.5-flash-lite', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-lite-latest'];
 
 async function callGemini(payload, retries = 7, delay = 4000) {
   let currentDelay = delay;
@@ -632,7 +632,7 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
 - english_definition (clear and simple definition)
 - synonyms (comma-separated list of 3-4 words)
 - antonyms (comma-separated list of 3-4 words)
-- related_terms (comma-separated list of related forms)
+- related_terms (comma-separated list of 2-3 related forms maximum, e.g. "impunity, impunitive")
 - example_sentence (contextual sentence)
 - upsc_usage (specific guidelines on how to use it in answers)
 - editorial_relevance (how it commonly appears in editorials)
@@ -655,9 +655,10 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
                 hindi_meaning: { type: "STRING" },
                 english_definition: { type: "STRING" },
                 synonyms: { type: "STRING" },
-                antonyms: { type: "STRING" }
+                antonyms: { type: "STRING" },
+                related_terms: { type: "STRING", description: "comma-separated list of 2-3 related forms maximum" }
               },
-              required: ["word", "pronunciation", "part_of_speech", "hindi_meaning", "english_definition", "synonyms", "antonyms"]
+              required: ["word", "pronunciation", "part_of_speech", "hindi_meaning", "english_definition", "synonyms", "antonyms", "related_terms"]
             }
           }
         }
@@ -698,16 +699,78 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
         }
       });
 
-      // 2. Bold + Italic Properties on next lines
-      const cleanPronunc = w.pronunciation ? (w.pronunciation.endsWith(',') ? w.pronunciation : w.pronunciation + ',') : 'N/A,';
-      const cleanPart = w.part_of_speech ? (w.part_of_speech.endsWith(',') ? w.part_of_speech : w.part_of_speech + ',') : 'N/A,';
+      // 2. Table: Pronunciation, Part of Speech, Hindi Meaning
+      weeklyBlocks.push({
+        object: 'block',
+        type: 'table',
+        table: {
+          table_width: 3,
+          has_column_header: true,
+          has_row_header: false,
+          children: [
+            {
+              object: 'block',
+              type: 'table_row',
+              table_row: {
+                cells: [
+                  [{ type: 'text', text: { content: 'Pronunciation' }, annotations: { bold: true } }],
+                  [{ type: 'text', text: { content: 'Part of speech' }, annotations: { bold: true } }],
+                  [{ type: 'text', text: { content: 'Hindi meaning' }, annotations: { bold: true } }]
+                ]
+              }
+            },
+            {
+              object: 'block',
+              type: 'table_row',
+              table_row: {
+                cells: [
+                  [{ type: 'text', text: { content: w.pronunciation || '' } }],
+                  [{ type: 'text', text: { content: w.part_of_speech || '' } }],
+                  [{ type: 'text', text: { content: w.hindi_meaning || '' } }]
+                ]
+              }
+            }
+          ]
+        }
+      });
 
-      weeklyBlocks.push(createBoldItalicParagraph('Pronunciation:', cleanPronunc));
-      weeklyBlocks.push(createBoldItalicParagraph('Part of speech:', cleanPart));
-      weeklyBlocks.push(createBoldItalicParagraph('Hindi meaning:', w.hindi_meaning));
-      weeklyBlocks.push(createBoldItalicParagraph('Simple English definition:', w.english_definition));
-      weeklyBlocks.push(createBoldItalicParagraph('Synonyms:', w.synonyms));
-      weeklyBlocks.push(createBoldItalicParagraph('Antonyms:', w.antonyms));
+      // 3. Simple English definition (labeled paragraph with bold, italic, and underlined label)
+      weeklyBlocks.push(createLabeledParagraph('Simple English definition:', w.english_definition));
+
+      // 4. Table: Synonyms, Antonyms, Related Terms
+      weeklyBlocks.push({
+        object: 'block',
+        type: 'table',
+        table: {
+          table_width: 3,
+          has_column_header: true,
+          has_row_header: false,
+          children: [
+            {
+              object: 'block',
+              type: 'table_row',
+              table_row: {
+                cells: [
+                  [{ type: 'text', text: { content: 'Synonyms' }, annotations: { bold: true } }],
+                  [{ type: 'text', text: { content: 'Antonyms' }, annotations: { bold: true } }],
+                  [{ type: 'text', text: { content: 'Related terms' }, annotations: { bold: true } }]
+                ]
+              }
+            },
+            {
+              object: 'block',
+              type: 'table_row',
+              table_row: {
+                cells: [
+                  [{ type: 'text', text: { content: w.synonyms || '' } }],
+                  [{ type: 'text', text: { content: w.antonyms || '' } }],
+                  [{ type: 'text', text: { content: w.related_terms || '' } }]
+                ]
+              }
+            }
+          ]
+        }
+      });
 
       // Divider between weekly words
       weeklyBlocks.push({
@@ -721,7 +784,7 @@ Return the output strictly as a JSON array matching the required schema. Ensure 
     console.log(`Weekly Page created. ID: ${weeklyPage.id}`);
 
     console.log(`Appending ${weeklyBlocks.length} weekly blocks in chunks...`);
-    const chunkSize = 24; // 3 words * 8 blocks/word = 24 blocks
+    const chunkSize = 25; // 5 words * 5 blocks/word = 25 blocks
     for (let i = 0; i < weeklyBlocks.length; i += chunkSize) {
       const chunk = weeklyBlocks.slice(i, i + chunkSize);
       await notion.blocks.children.append({
